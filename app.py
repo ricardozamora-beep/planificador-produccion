@@ -108,39 +108,44 @@ if file_cat and file_ped:
         if plan_prod:
             st.success("✅ ¡Planificación calculada con éxito!")
             
-            # --- INICIO DEL BLOQUE DE EXCEL FORMATEADO ---
+            # --- INICIO DEL BLOQUE ACTUALIZADO PARA DÍAS EN CERO ---
             output = io.BytesIO()
             df_detalle = pd.DataFrame(plan_prod)
-            df_diario = pd.DataFrame(list(diario.items()), columns=['FECHA', 'KG TOTAL DÍA']).sort_values('FECHA')
             
+            # 1. Crear el DataFrame diario base
+            df_diario_real = pd.DataFrame(list(diario.items()), columns=['FECHA', 'KG TOTAL DÍA'])
+            df_diario_real['FECHA'] = pd.to_datetime(df_diario_real['FECHA'])
+
+            # 2. Generar rango completo de fechas (desde el inicio hasta el fin del plan)
+            fecha_min = df_diario_real['FECHA'].min()
+            fecha_max = df_diario_real['FECHA'].max()
+            rango_completo = pd.date_range(start=fecha_min, end=fecha_max)
+            
+            # 3. Unir y rellenar con 0
+            df_diario = pd.DataFrame({'FECHA': rango_completo})
+            df_diario = pd.merge(df_diario, df_diario_real, on='FECHA', how='left').fillna(0)
+            
+            # Formatear fecha para el Excel
+            df_diario['FECHA'] = df_diario['FECHA'].dt.strftime('%d/%m/%Y')
+            # --- FIN DEL BLOQUE DE DÍAS EN CERO ---
+
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                # 1. Hoja de Detalle
+                # [Hoja Detalle - El código de formateo se mantiene igual]
                 df_detalle.to_excel(writer, sheet_name='Detalle', index=False)
                 workbook = writer.book
                 sheet1 = writer.sheets['Detalle']
                 
-                # Definir Estilos Profesionales
-                fmt_header = workbook.add_format({
-                    'bold': True, 
-                    'bg_color': '#1F4E78', 
-                    'font_color': 'white', 
-                    'border': 1,
-                    'align': 'center',
-                    'valign': 'vcenter'
-                })
+                fmt_header = workbook.add_format({'bold': True, 'bg_color': '#1F4E78', 'font_color': 'white', 'border': 1, 'align': 'center'})
                 fmt_datos = workbook.add_format({'border': 1, 'align': 'center'})
                 fmt_num = workbook.add_format({'border': 1, 'num_format': '#,##0', 'align': 'center'})
                 
-                # Formatear Hoja 1
                 for col_num, value in enumerate(df_detalle.columns.values):
                     sheet1.write(0, col_num, value, fmt_header)
                     ancho = 35 if value == "PRODUCTO" else 18
                     sheet1.set_column(col_num, col_num, ancho, fmt_datos)
-                
-                # Formato numérico para KG y UNIDADES (Columnas 2 y 3 empezando desde 0)
                 sheet1.set_column(2, 3, 15, fmt_num)
 
-                # 2. Hoja de Resumen Diario
+                # 4. Hoja de Resumen Diario (Actualizada)
                 df_diario.to_excel(writer, sheet_name='Diario', index=False)
                 sheet2 = writer.sheets['Diario']
                 
@@ -149,9 +154,8 @@ if file_cat and file_ped:
                     sheet2.set_column(col_num, col_num, 20, fmt_datos)
                 sheet2.set_column(1, 1, 18, fmt_num) 
             
-            # Botón de descarga
             st.download_button(
-                label="📥 Descargar Plan Formateado",
+                label="📥 Descargar Plan con Días Completos",
                 data=output.getvalue(),
                 file_name=f"Plan_Produccion_{datetime.now().strftime('%d_%m_%Y')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"

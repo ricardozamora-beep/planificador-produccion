@@ -108,24 +108,58 @@ if file_cat and file_ped:
         if plan_prod:
             st.success("✅ ¡Planificación calculada con éxito!")
             
-            # Crear Excel en memoria
+            # --- INICIO DEL BLOQUE DE EXCEL FORMATEADO ---
             output = io.BytesIO()
             df_detalle = pd.DataFrame(plan_prod)
             df_diario = pd.DataFrame(list(diario.items()), columns=['FECHA', 'KG TOTAL DÍA']).sort_values('FECHA')
             
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                # 1. Hoja de Detalle
                 df_detalle.to_excel(writer, sheet_name='Detalle', index=False)
+                workbook = writer.book
+                sheet1 = writer.sheets['Detalle']
+                
+                # Definir Estilos Profesionales
+                fmt_header = workbook.add_format({
+                    'bold': True, 
+                    'bg_color': '#1F4E78', 
+                    'font_color': 'white', 
+                    'border': 1,
+                    'align': 'center',
+                    'valign': 'vcenter'
+                })
+                fmt_datos = workbook.add_format({'border': 1, 'align': 'center'})
+                fmt_num = workbook.add_format({'border': 1, 'num_format': '#,##0', 'align': 'center'})
+                
+                # Formatear Hoja 1
+                for col_num, value in enumerate(df_detalle.columns.values):
+                    sheet1.write(0, col_num, value, fmt_header)
+                    ancho = 35 if value == "PRODUCTO" else 18
+                    sheet1.set_column(col_num, col_num, ancho, fmt_datos)
+                
+                # Formato numérico para KG y UNIDADES (Columnas 2 y 3 empezando desde 0)
+                sheet1.set_column(2, 3, 15, fmt_num)
+
+                # 2. Hoja de Resumen Diario
                 df_diario.to_excel(writer, sheet_name='Diario', index=False)
+                sheet2 = writer.sheets['Diario']
+                
+                for col_num, value in enumerate(df_diario.columns.values):
+                    sheet2.write(0, col_num, value, fmt_header)
+                    sheet2.set_column(col_num, col_num, 20, fmt_datos)
+                sheet2.set_column(1, 1, 18, fmt_num) 
             
+            # Botón de descarga
             st.download_button(
-                label="📥 Descargar Plan de Producción",
+                label="📥 Descargar Plan Formateado",
                 data=output.getvalue(),
-                file_name=f"Plan_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                file_name=f"Plan_Produccion_{datetime.now().strftime('%d_%m_%Y')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
             
-            st.subheader("Vista Previa del Detalle")
+            st.subheader("Vista Previa")
             st.dataframe(df_detalle)
-            
+            # --- FIN DEL BLOQUE DE EXCEL FORMATEADO ---
+
     except Exception as e:
         st.error(f"Hubo un problema: {e}")

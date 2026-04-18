@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import io
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
-st.set_page_config(page_title="Planificador Pro - Heredia", page_icon="⏱️", layout="wide")
+st.set_page_config(page_title="Planificador Dinámico - Heredia", page_icon="⏱️", layout="wide")
 
 # --- INICIALIZACIÓN DE ESTADO ---
 if 'lista_pedidos' not in st.session_state:
@@ -47,7 +47,7 @@ feriados_sel = st.sidebar.date_input("Días Feriados", value=[])
 lista_feriados = [d.strftime("%Y-%m-%d") for d in feriados_sel]
 
 # --- CUERPO PRINCIPAL ---
-st.title("⏱️ Planificador de Producción Interactivo")
+st.title("⏱️ Planificador de Producción Dinámico")
 
 file_cat = st.file_uploader("1. Sube el Catálogo de Productos", type=["xlsx"])
 
@@ -82,32 +82,36 @@ if file_cat:
             else:
                 st.error("Código no encontrado.")
 
-    # 3. Editor de Datos (Permite eliminar filas seleccionándolas)
+    # 3. Editor de Datos con Reordenamiento
     if not st.session_state.lista_pedidos.empty:
         st.divider()
-        st.subheader("📝 Editar Pedidos")
-        st.info("💡 Para eliminar: selecciona la fila y presiona 'Suprimir' o usa el icono de la papelera.")
+        st.subheader("📝 Editar y Reordenar Pedidos")
+        st.info("💡 **Para reordenar:** Mantén presionada una fila desde el número a la izquierda y arrástrala hacia arriba o abajo.")
         
-        # El data_editor permite borrar filas directamente
+        # Guardamos los cambios del editor incluyendo el nuevo orden
         st.session_state.lista_pedidos = st.data_editor(
             st.session_state.lista_pedidos,
             num_rows="dynamic",
             use_container_width=True,
-            key="editor_pedidos"
+            key="editor_reordenar"
         )
 
-        # 4. Cálculo del Cronograma Final
+        # 4. Cálculo del Cronograma (Basado en el orden actual de la tabla)
         st.subheader("📅 Cronograma Resultante")
         tiempo_actual = datetime.combine(fecha_inicio_plan, datetime.min.time()).replace(hour=h_inicio)
         plan_calculado = []
 
+        # Recorremos la lista de pedidos tal cual está ordenada en el editor
         for _, pedido in st.session_state.lista_pedidos.iterrows():
-            info = catalogo[str(pedido['Código'])]
+            cod_str = str(pedido['Código'])
+            if cod_str not in catalogo: continue # Por seguridad si el código se borra accidentalmente
+            
+            info = catalogo[cod_str]
             tasa_kgh = float(info['Tasa']) * 1000
             peso_u = float(info.get('Peso unitario', 0))
             
             # Setup
-            rem_s = pedido['Setup']
+            rem_s = float(pedido['Setup'])
             while rem_s > 0:
                 tiempo_actual = saltar_no_laborales(tiempo_actual, lista_feriados, h_inicio, h_lun_jue, h_vie)
                 espacio = (obtener_fin_turno(tiempo_actual, h_lun_jue, h_vie) - tiempo_actual).total_seconds()/3600
@@ -117,7 +121,7 @@ if file_cat:
             inicio_prod = saltar_no_laborales(tiempo_actual, lista_feriados, h_inicio, h_lun_jue, h_vie)
             
             # Producción
-            rem_c = pedido['Cantidad']
+            rem_c = float(pedido['Cantidad'])
             while rem_c > 0.001:
                 tiempo_actual = saltar_no_laborales(tiempo_actual, lista_feriados, h_inicio, h_lun_jue, h_vie)
                 cap_kg = ((obtener_fin_turno(tiempo_actual, h_lun_jue, h_vie) - tiempo_actual).total_seconds()/3600) * tasa_kgh
@@ -134,7 +138,7 @@ if file_cat:
             })
 
         df_final = pd.DataFrame(plan_calculado)
-        st.table(df_final)
+        st.dataframe(df_final, use_container_width=True)
 
         # Botones de Acción
         col1, col2 = st.columns([1, 4])

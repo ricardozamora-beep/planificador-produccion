@@ -49,7 +49,12 @@ if file_cat:
     df_cat = pd.read_excel(file_cat)
     df_cat.columns = df_cat.columns.str.strip()
     df_cat['Código'] = df_cat['Código'].astype(str).str.strip()
-    catalogo = df_cat.set_index('Código').to_dict('index')
+    df_cat['Código'] = df_cat['Código'].astype(str).str.strip()
+    
+    # NUEVO: Eliminar duplicados antes de convertir a diccionario
+    df_cat_limpio = df_cat.drop_duplicates(subset=['Código'])
+    
+    catalogo = df_cat_limpio.set_index('Código').to_dict('index')
 
     st.divider()
     

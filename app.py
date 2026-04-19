@@ -52,6 +52,7 @@ if file_cat:
 
     st.divider()
     
+    # --- FORMULARIO DE INGRESO ---
     st.subheader("➕ Agregar Nuevo Pedido")
     with st.form("nuevo_pedido", clear_on_submit=True):
         col1, col2, col3 = st.columns(3)
@@ -96,7 +97,7 @@ if file_cat:
         
         tiempo_actual = datetime.combine(fecha_inicio_plan, datetime.min.time()).replace(hour=h_ini)
         plan_final = []
-        produccion_diaria = []
+        produccion_diaria_raw = []
         dias_es = {"Mon": "Lun", "Tue": "Mar", "Wed": "Mie", "Thu": "Jue", "Fri": "Vie", "Sat": "Sab", "Sun": "Dom"}
 
         df_para_calc = st.session_state.lista_pedidos.sort_values("Orden")
@@ -122,24 +123,20 @@ if file_cat:
                 
                 inicio_prod = saltar_no_laborales(tiempo_actual, feriados, h_ini, h_lj, h_v)
                 
-                # Lógica de Producción (Rastreo por día)
+                # Lógica de Producción
                 while rem_c > 0.001:
                     tiempo_actual = saltar_no_laborales(tiempo_actual, feriados, h_ini, h_lj, h_v)
                     fin_turno = obtener_fin_turno(tiempo_actual, h_lj, h_v)
                     cap_horas = (fin_turno - tiempo_actual).total_seconds()/3600
                     cap_kg = cap_horas * tasa_kgh
-                    
                     prod_kg = min(rem_c, cap_kg)
                     
-                    # Guardar para la hoja de producción diaria
-                    dia_str = dias_es.get(tiempo_actual.strftime('%a'), tiempo_actual.strftime('%a'))
-                    fecha_legible = f"{dia_str} {tiempo_actual.strftime('%d/%m/%y')}"
-                    
-                    produccion_diaria.append({
-                        "Fecha": fecha_legible,
-                        "Código": cod_str,
-                        "Producto": info['Producto'],
-                        "Kg": round(prod_kg, 2)
+                    # Registro para el resumen diario por fecha
+                    produccion_diaria_raw.append({
+                        "Fecha_Sort": tiempo_actual.date(), # Para ordenar cronológicamente
+                        "Día": dias_es.get(tiempo_actual.strftime('%a'), tiempo_actual.strftime('%a')),
+                        "Fecha": tiempo_actual.strftime('%d/%m/%y'),
+                        "Kg": prod_kg
                     })
                     
                     tiempo_actual += timedelta(hours=prod_kg / tasa_kgh if tasa_kgh > 0 else 0); rem_c -= prod_kg
@@ -161,41 +158,43 @@ if file_cat:
             df_cronograma = pd.DataFrame(plan_final)
             st.dataframe(df_cronograma, use_container_width=True, hide_index=True)
             
-            # --- GENERACIÓN DE EXCEL CON XLSXWRITER ---
+            # --- GENERACIÓN DE EXCEL ---
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 workbook = writer.book
                 
-                # Formatos Profesionales
-                header_fmt = workbook.add_format({'bold': True, 'bg_color': '#1F4E78', 'font_color': 'white', 'border': 1, 'align': 'center'})
-                cell_fmt = workbook.add_format({'border': 1, 'align': 'left'})
-                num_fmt = workbook.add_format({'border': 1, 'num_format': '#,##0.00', 'align': 'right'})
+                # Formatos
+                fmt_header = workbook.add_format({'bold': True, 'bg_color': '#1F4E78', 'font_color': 'white', 'border': 1, 'align': 'center'})
+                fmt_cell = workbook.add_format({'border': 1, 'align': 'left'})
+                fmt_num = workbook.add_format({'border': 1, 'num_format': '#,##0', 'align': 'right'})
 
-                # HOJA 1: Plan de Producción
+                # HOJA 1: Detalle por Pedido
                 df_cronograma.to_excel(writer, sheet_name='Plan de Producción', index=False)
                 ws1 = writer.sheets['Plan de Producción']
                 for col_num, value in enumerate(df_cronograma.columns.values):
-                    ws1.write(0, col_num, value, header_fmt)
-                    ws1.set_column(col_num, col_num, 22, cell_fmt)
+                    ws1.write(0, col_num, value, fmt_header)
+                    ws1.set_column(col_num, col_num, 22, fmt_cell)
 
-                # HOJA 2: Producción Diaria
-                if produccion_diaria:
-                    df_diario = pd.DataFrame(produccion_diaria)
-                    # Agrupar por día y producto para un resumen limpio
-                    df_resumen = df_diario.groupby(["Fecha", "Código", "Producto"])["Kg"].sum().reset_index()
+                # HOJA 2: Totales Diarios (Resumen Simplificado)
+                if produccion_diaria_raw:
+                    df_raw = pd.DataFrame(produccion_diaria_raw)
+                    # Sumar todos los kg por día
+                    df_diario_total = df_raw.groupby(["Fecha_Sort", "Día", "Fecha"])["Kg"].sum().reset_index()
+                    df_diario_total = df_diario_total.sort_values("Fecha_Sort").drop(columns=["Fecha_Sort"])
+                    df_diario_total.columns = ["Día", "Fecha", "Total Producido (Kg)"]
                     
-                    df_resumen.to_excel(writer, sheet_name='Producción Diaria', index=False)
-                    ws2 = writer.sheets['Producción Diaria']
-                    for col_num, value in enumerate(df_resumen.columns.values):
-                        ws2.write(0, col_num, value, header_fmt)
-                        ws2.set_column(col_num, col_num, 20, cell_fmt)
-                    ws2.set_column(3, 3, 15, num_fmt) # Formato para Kg
+                    df_diario_total.to_excel(writer, sheet_name='Totales Diarios', index=False)
+                    ws2 = writer.sheets['Totales Diarios']
+                    for col_num, value in enumerate(df_diario_total.columns.values):
+                        ws2.write(0, col_num, value, fmt_header)
+                        ws2.set_column(col_num, col_num, 20, fmt_cell)
+                    ws2.set_column(2, 2, 25, fmt_num) # Columna Total Kg
 
             st.download_button(
-                label="📥 Descargar Plan Profesional (2 Hojas)",
+                label="📥 Descargar Reporte Profesional",
                 data=output.getvalue(),
-                file_name="Plan_Produccion_Heredia.xlsx",
+                file_name="Reporte_Produccion_Heredia.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 else:
-    st.info("👋 Por favor, sube el catálogo para comenzar.")
+    st.info("👋 Sube el catálogo para comenzar.")

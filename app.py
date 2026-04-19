@@ -25,13 +25,14 @@ def saltar_no_laborales(dt, feriados, h_ini, h_lj, h_v):
         return dt
 
 # --- INICIALIZACIÓN DE DATOS ---
+# Usamos un DataFrame inicial pero dejamos que el editor maneje su estado
 if 'df_pedidos' not in st.session_state:
     st.session_state.df_pedidos = pd.DataFrame(
         [{"Orden": 1, "Código": "", "Cantidad": 0.0, "Setup": 0.0}],
         columns=["Orden", "Código", "Cantidad", "Setup"]
     )
 
-# --- SIDEBAR: CONFIGURACIÓN ---
+# --- SIDEBAR ---
 st.sidebar.header("⚙️ Configuración de Planta")
 h_ini = st.sidebar.number_input("Hora Inicio Turno", 0, 23, 7)
 h_lj = st.sidebar.number_input("Salida Lun-Jue", 0, 23, 17)
@@ -45,7 +46,6 @@ st.title("🏭 Planificador de Producción Interactivo")
 file_cat = st.file_uploader("1. Sube el Catálogo de Productos", type=["xlsx"])
 
 if file_cat:
-    # Cargar catálogo de forma segura (evitando el error de duplicados)
     df_cat = pd.read_excel(file_cat)
     df_cat.columns = df_cat.columns.str.strip()
     df_cat['Código'] = df_cat['Código'].astype(str).str.strip()
@@ -53,12 +53,11 @@ if file_cat:
 
     st.divider()
     
-    # 2. Tabla de Ingreso Directo
     st.subheader("📋 Tabla de Pedidos")
-    st.info("💡 Digita en las celdas, pega valores o usa el '+' al final para nuevas filas.")
     
-    # Editor de datos
-    edited_df = st.data_editor(
+    # LA SOLUCIÓN: Usamos el editor directamente sobre el estado inicial
+    # y capturamos el resultado en una nueva variable 'df_editado'
+    df_editado = st.data_editor(
         st.session_state.df_pedidos,
         num_rows="dynamic",
         use_container_width=True,
@@ -68,9 +67,8 @@ if file_cat:
             "Cantidad": st.column_config.NumberColumn("Kg", min_value=0),
             "Setup": st.column_config.NumberColumn("Setup (h)", min_value=0, step=0.5)
         },
-        key="editor_principal"
+        key="editor_fijo" # Llave estática para evitar reinicios
     )
-    st.session_state.df_pedidos = edited_df
 
     if st.button("🗑️ Borrar toda la tabla"):
         st.session_state.df_pedidos = pd.DataFrame(
@@ -83,8 +81,8 @@ if file_cat:
     st.divider()
     fecha_inicio_plan = st.date_input("📅 Fecha de inicio de producción", datetime.now())
 
-    # Validamos que haya datos para calcular
-    df_para_calc = edited_df[edited_df['Código'].astype(str).str.strip() != ""]
+    # Validamos datos sobre el DF que sale del editor
+    df_para_calc = df_editado[df_editado['Código'].astype(str).str.strip() != ""]
     
     if not df_para_calc.empty:
         st.subheader("📅 Cronograma Resultante")
@@ -92,7 +90,6 @@ if file_cat:
         tiempo_actual = datetime.combine(fecha_inicio_plan, datetime.min.time()).replace(hour=h_ini)
         plan_calculado = []
 
-        # Ordenar por 'Orden' para respetar la prioridad del usuario
         for _, fila in df_para_calc.sort_values("Orden").iterrows():
             cod_str = str(fila['Código']).strip()
             
@@ -134,9 +131,7 @@ if file_cat:
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df_final.to_excel(writer, sheet_name='Plan', index=False)
-            st.download_button("📥 Descargar Plan en Excel", data=output.getvalue(), file_name="Plan_Produccion.xlsx")
-        else:
-            st.warning("⚠️ Ingresa códigos válidos del catálogo para calcular.")
+            st.download_button("📥 Descargar Plan en Excel", data=output.getvalue(), file_name="Plan_Heredia.xlsx")
 
 else:
-    st.info("👋 Sube el archivo de catálogo para habilitar la tabla.")
+    st.info("👋 Sube el catálogo para habilitar la tabla.")

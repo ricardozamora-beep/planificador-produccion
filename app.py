@@ -37,7 +37,7 @@ feriados_input = st.sidebar.date_input("Días Feriados", [])
 feriados = [d.strftime("%Y-%m-%d") for d in feriados_input]
 
 # --- CUERPO PRINCIPAL ---
-st.title("🏭 Planificador de Producción Estable")
+st.title("🏭 Planificador de Producción")
 
 file_cat = st.file_uploader("1. Sube el Catálogo de Productos", type=["xlsx"])
 

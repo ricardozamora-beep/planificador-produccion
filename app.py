@@ -42,6 +42,10 @@ st.title("🏭 Planificador de Producción Estable")
 file_cat = st.file_uploader("1. Sube el Catálogo de Productos", type=["xlsx"])
 
 if file_cat:
+    # --- CAMBIO 1: Fecha de inicio se introduce después de subir el catálogo ---
+    st.divider()
+    fecha_inicio_plan = st.date_input("📅 Fecha de inicio de producción", datetime.now())
+    
     df_cat = pd.read_excel(file_cat)
     df_cat.columns = df_cat.columns.str.strip()
     df_cat['Código'] = df_cat['Código'].astype(str).str.strip()
@@ -49,12 +53,15 @@ if file_cat:
 
     st.divider()
     
-    # --- FORMULARIO DE INGRESO DATO POR DATO ---
+    # --- FORMULARIO DE INGRESO ---
     st.subheader("➕ Agregar Nuevo Pedido")
     with st.form("nuevo_pedido", clear_on_submit=True):
         col1, col2, col3 = st.columns(3)
         cod_input = col1.text_input("Código de Material")
-        cant_input = col2.number_input("Cantidad (Kg)", min_value=0.0, step=100.0)
+        
+        # --- CAMBIO 2: Botones de cantidad aumentan/disminuyen 500 kg ---
+        cant_input = col2.number_input("Cantidad (Kg)", min_value=0.0, step=500.0)
+        
         set_input = col3.number_input("Setup (Horas)", min_value=0.0, step=0.5)
         
         submit = st.form_submit_button("Agregar a la lista")
@@ -77,7 +84,7 @@ if file_cat:
         st.divider()
         st.subheader("📋 Pedidos en Cola")
         df_pedidos = pd.DataFrame(st.session_state.lista_pedidos)
-        st.table(df_pedidos) # st.table es estático y no falla
+        st.table(df_pedidos)
 
         if st.button("🗑️ Borrar toda la lista", type="primary"):
             st.session_state.lista_pedidos = []
@@ -85,8 +92,6 @@ if file_cat:
 
         # --- CÁLCULO DEL CRONOGRAMA ---
         st.divider()
-        fecha_inicio_plan = st.date_input("📅 Fecha de inicio", datetime.now())
-        
         st.subheader("📅 Cronograma Resultante")
         
         tiempo_actual = datetime.combine(fecha_inicio_plan, datetime.min.time()).replace(hour=h_ini)

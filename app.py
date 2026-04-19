@@ -48,11 +48,11 @@ if file_cat:
     df_cat = pd.read_excel(file_cat)
     df_cat.columns = df_cat.columns.str.strip()
     df_cat['Código'] = df_cat['Código'].astype(str).str.strip()
+    # Aseguramos que existan las columnas necesarias
     catalogo = df_cat.drop_duplicates(subset=['Código']).set_index('Código').to_dict('index')
 
     st.divider()
     
-    # --- FORMULARIO DE INGRESO ---
     st.subheader("➕ Agregar Nuevo Pedido")
     with st.form("nuevo_pedido", clear_on_submit=True):
         col1, col2, col3 = st.columns(3)
@@ -107,12 +107,16 @@ if file_cat:
             if cod_str in catalogo:
                 info = catalogo[cod_str]
                 tasa_kgh = float(info['Tasa']) * 1000
+                peso_unitario = float(info.get('Peso unitario', 0))
                 
                 try:
                     rem_s = float(p['Setup']) if pd.notna(p['Setup']) else 0.0
                     rem_c = float(p['Cantidad']) if pd.notna(p['Cantidad']) else 0.0
                 except:
                     rem_s, rem_c = 0.0, 0.0
+
+                # Cálculo de piezas
+                piezas = int(rem_c / peso_unitario) if peso_unitario > 0 else 0
 
                 # Lógica de Setup
                 while rem_s > 0:
@@ -124,22 +128,22 @@ if file_cat:
                 inicio_prod = saltar_no_laborales(tiempo_actual, feriados, h_ini, h_lj, h_v)
                 
                 # Lógica de Producción
-                while rem_c > 0.001:
+                temp_c = rem_c
+                while temp_c > 0.001:
                     tiempo_actual = saltar_no_laborales(tiempo_actual, feriados, h_ini, h_lj, h_v)
                     fin_turno = obtener_fin_turno(tiempo_actual, h_lj, h_v)
                     cap_horas = (fin_turno - tiempo_actual).total_seconds()/3600
                     cap_kg = cap_horas * tasa_kgh
-                    prod_kg = min(rem_c, cap_kg)
+                    prod_kg = min(temp_c, cap_kg)
                     
-                    # Registro para el resumen diario por fecha
                     produccion_diaria_raw.append({
-                        "Fecha_Sort": tiempo_actual.date(), # Para ordenar cronológicamente
+                        "Fecha_Sort": tiempo_actual.date(),
                         "Día": dias_es.get(tiempo_actual.strftime('%a'), tiempo_actual.strftime('%a')),
                         "Fecha": tiempo_actual.strftime('%d/%m/%y'),
                         "Kg": prod_kg
                     })
                     
-                    tiempo_actual += timedelta(hours=prod_kg / tasa_kgh if tasa_kgh > 0 else 0); rem_c -= prod_kg
+                    tiempo_actual += timedelta(hours=prod_kg / tasa_kgh if tasa_kgh > 0 else 0); temp_c -= prod_kg
                 
                 def f_fecha(dt):
                     dia = dias_es.get(dt.strftime('%a'), dt.strftime('%a'))
@@ -150,6 +154,7 @@ if file_cat:
                     "CÓDIGO": cod_str,
                     "PRODUCTO": info['Producto'],
                     "CANTIDAD (Kg)": p['Cantidad'],
+                    "PIEZAS": piezas,
                     "INICIO": f_fecha(inicio_prod),
                     "FIN": f_fecha(tiempo_actual)
                 })
@@ -163,22 +168,22 @@ if file_cat:
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 workbook = writer.book
                 
-                # Formatos
                 fmt_header = workbook.add_format({'bold': True, 'bg_color': '#1F4E78', 'font_color': 'white', 'border': 1, 'align': 'center'})
                 fmt_cell = workbook.add_format({'border': 1, 'align': 'left'})
                 fmt_num = workbook.add_format({'border': 1, 'num_format': '#,##0', 'align': 'right'})
 
-                # HOJA 1: Detalle por Pedido
+                # HOJA 1: Plan de Producción (Con columna PIEZAS)
                 df_cronograma.to_excel(writer, sheet_name='Plan de Producción', index=False)
                 ws1 = writer.sheets['Plan de Producción']
                 for col_num, value in enumerate(df_cronograma.columns.values):
                     ws1.write(0, col_num, value, fmt_header)
-                    ws1.set_column(col_num, col_num, 22, fmt_cell)
+                    ws1.set_column(col_num, col_num, 20, fmt_cell)
+                # Ajuste de formato para columnas numéricas
+                ws1.set_column(3, 4, 15, fmt_num) 
 
-                # HOJA 2: Totales Diarios (Resumen Simplificado)
+                # HOJA 2: Totales Diarios
                 if produccion_diaria_raw:
                     df_raw = pd.DataFrame(produccion_diaria_raw)
-                    # Sumar todos los kg por día
                     df_diario_total = df_raw.groupby(["Fecha_Sort", "Día", "Fecha"])["Kg"].sum().reset_index()
                     df_diario_total = df_diario_total.sort_values("Fecha_Sort").drop(columns=["Fecha_Sort"])
                     df_diario_total.columns = ["Día", "Fecha", "Total Producido (Kg)"]
@@ -188,7 +193,7 @@ if file_cat:
                     for col_num, value in enumerate(df_diario_total.columns.values):
                         ws2.write(0, col_num, value, fmt_header)
                         ws2.set_column(col_num, col_num, 20, fmt_cell)
-                    ws2.set_column(2, 2, 25, fmt_num) # Columna Total Kg
+                    ws2.set_column(2, 2, 25, fmt_num)
 
             st.download_button(
                 label="📥 Descargar Reporte Profesional",

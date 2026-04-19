@@ -48,7 +48,6 @@ if file_cat:
     df_cat = pd.read_excel(file_cat)
     df_cat.columns = df_cat.columns.str.strip()
     df_cat['Código'] = df_cat['Código'].astype(str).str.strip()
-    # Aseguramos que existan las columnas necesarias
     catalogo = df_cat.drop_duplicates(subset=['Código']).set_index('Código').to_dict('index')
 
     st.divider()
@@ -115,10 +114,8 @@ if file_cat:
                 except:
                     rem_s, rem_c = 0.0, 0.0
 
-                # Cálculo de piezas
                 piezas = int(rem_c / peso_unitario) if peso_unitario > 0 else 0
 
-                # Lógica de Setup
                 while rem_s > 0:
                     tiempo_actual = saltar_no_laborales(tiempo_actual, feriados, h_ini, h_lj, h_v)
                     espacio = (obtener_fin_turno(tiempo_actual, h_lj, h_v) - tiempo_actual).total_seconds()/3600
@@ -127,7 +124,6 @@ if file_cat:
                 
                 inicio_prod = saltar_no_laborales(tiempo_actual, feriados, h_ini, h_lj, h_v)
                 
-                # Lógica de Producción
                 temp_c = rem_c
                 while temp_c > 0.001:
                     tiempo_actual = saltar_no_laborales(tiempo_actual, feriados, h_ini, h_lj, h_v)
@@ -138,8 +134,6 @@ if file_cat:
                     
                     produccion_diaria_raw.append({
                         "Fecha_Sort": tiempo_actual.date(),
-                        "Día": dias_es.get(tiempo_actual.strftime('%a'), tiempo_actual.strftime('%a')),
-                        "Fecha": tiempo_actual.strftime('%d/%m/%y'),
                         "Kg": prod_kg
                     })
                     
@@ -167,39 +161,42 @@ if file_cat:
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 workbook = writer.book
-                
                 fmt_header = workbook.add_format({'bold': True, 'bg_color': '#1F4E78', 'font_color': 'white', 'border': 1, 'align': 'center'})
                 fmt_cell = workbook.add_format({'border': 1, 'align': 'left'})
                 fmt_num = workbook.add_format({'border': 1, 'num_format': '#,##0', 'align': 'right'})
 
-                # HOJA 1: Plan de Producción (Con columna PIEZAS)
+                # HOJA 1: Plan
                 df_cronograma.to_excel(writer, sheet_name='Plan de Producción', index=False)
                 ws1 = writer.sheets['Plan de Producción']
                 for col_num, value in enumerate(df_cronograma.columns.values):
                     ws1.write(0, col_num, value, fmt_header)
                     ws1.set_column(col_num, col_num, 20, fmt_cell)
-                # Ajuste de formato para columnas numéricas
                 ws1.set_column(3, 4, 15, fmt_num) 
 
-                # HOJA 2: Totales Diarios
+                # HOJA 2: Totales Diarios con días 0 kg
                 if produccion_diaria_raw:
                     df_raw = pd.DataFrame(produccion_diaria_raw)
-                    df_diario_total = df_raw.groupby(["Fecha_Sort", "Día", "Fecha"])["Kg"].sum().reset_index()
-                    df_diario_total = df_diario_total.sort_values("Fecha_Sort").drop(columns=["Fecha_Sort"])
-                    df_diario_total.columns = ["Día", "Fecha", "Total Producido (Kg)"]
+                    resumen_kg = df_raw.groupby("Fecha_Sort")["Kg"].sum()
                     
-                    df_diario_total.to_excel(writer, sheet_name='Totales Diarios', index=False)
+                    # Rellenar días faltantes con 0
+                    idx = pd.date_range(resumen_kg.index.min(), resumen_kg.index.max())
+                    df_completo = resumen_kg.reindex(idx.date, fill_value=0).reset_index()
+                    df_completo.columns = ["Fecha_Sort", "Kg"]
+                    
+                    # Formatear para el Excel
+                    df_completo["Día"] = df_completo["Fecha_Sort"].apply(lambda x: dias_es.get(x.strftime('%a'), x.strftime('%a')))
+                    df_completo["Fecha"] = df_completo["Fecha_Sort"].apply(lambda x: x.strftime('%d/%m/%y'))
+                    
+                    df_diario_final = df_completo[["Día", "Fecha", "Kg"]]
+                    df_diario_final.columns = ["Día", "Fecha", "Total Producido (Kg)"]
+                    
+                    df_diario_final.to_excel(writer, sheet_name='Totales Diarios', index=False)
                     ws2 = writer.sheets['Totales Diarios']
-                    for col_num, value in enumerate(df_diario_total.columns.values):
+                    for col_num, value in enumerate(df_diario_final.columns.values):
                         ws2.write(0, col_num, value, fmt_header)
                         ws2.set_column(col_num, col_num, 20, fmt_cell)
                     ws2.set_column(2, 2, 25, fmt_num)
 
-            st.download_button(
-                label="📥 Descargar Reporte Profesional",
-                data=output.getvalue(),
-                file_name="Reporte_Produccion_Heredia.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+            st.download_button(label="📥 Descargar Reporte Profesional", data=output.getvalue(), file_name="Reporte_Produccion_Heredia.xlsx")
 else:
     st.info("👋 Sube el catálogo para comenzar.")

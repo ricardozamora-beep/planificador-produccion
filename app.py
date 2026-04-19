@@ -4,11 +4,7 @@ from datetime import datetime, timedelta
 import io
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
-st.set_page_config(page_title="Planificador Dinámico - Heredia", page_icon="⏱️", layout="wide")
-
-# --- INICIALIZACIÓN DE ESTADO ---
-if 'lista_pedidos' not in st.session_state:
-    st.session_state.lista_pedidos = pd.DataFrame(columns=["Orden", "Código", "Producto", "Cantidad", "Setup"])
+st.set_page_config(page_title="Planificador Masivo - Heredia", page_icon="⏱️", layout="wide")
 
 # --- LÓGICA DE TURNOS ---
 def obtener_fin_turno(dt, hora_lun_jue, hora_vie):
@@ -31,11 +27,11 @@ def saltar_no_laborales(dt, lista_feriados, hora_inicio_turno, hora_lun_jue, hor
         return dt
 
 # --- DIÁLOGO DE CONFIRMACIÓN ---
-@st.dialog("¿Estás seguro?")
+@st.dialog("¿Limpiar todo el plan?")
 def confirmar_borrar_todo():
-    st.write("Esta acción eliminará todos los productos cargados.")
-    if st.button("Sí, borrar todo"):
-        st.session_state.lista_pedidos = pd.DataFrame(columns=["Orden", "Código", "Producto", "Cantidad", "Setup"])
+    st.write("Se borrarán todos los datos ingresados en la tabla.")
+    if st.button("Sí, limpiar tabla"):
+        st.session_state.data_editor_input = pd.DataFrame(columns=["Código", "Cantidad", "Setup"])
         st.rerun()
 
 # --- SIDEBAR: CONFIGURACIÓN ---
@@ -47,118 +43,99 @@ feriados_sel = st.sidebar.date_input("Días Feriados", value=[])
 lista_feriados = [d.strftime("%Y-%m-%d") for d in feriados_sel]
 
 # --- CUERPO PRINCIPAL ---
-st.title("⏱️ Planificador de Producción")
+st.title("⏱️ Planificador de Producción Masivo")
+st.markdown("Pega tus datos directamente en la tabla (Código, Cantidad y Setup).")
 
-file_cat = st.file_uploader("1. Sube el Catálogo de Productos", type=["xlsx"])
+file_cat = st.file_uploader("1. Sube el Catálogo de Productos para validar", type=["xlsx"])
 
 if file_cat:
     df_cat = pd.read_excel(file_cat)
     df_cat.columns = df_cat.columns.str.strip()
     df_cat['Código'] = df_cat['Código'].astype(str).str.strip()
-    df_cat_limpio = df_cat.drop_duplicates(subset=['Código'])
-    catalogo = df_cat_limpio.set_index('Código').to_dict('index')
+    catalogo = df_cat.drop_duplicates(subset=['Código']).set_index('Código').to_dict('index')
 
     st.divider()
     fecha_inicio_plan = st.date_input("📅 Fecha de inicio de producción", datetime.now())
 
-    # 2. Formulario de Ingreso
-    st.subheader("➕ Añadir Producto")
-    with st.form("formulario_pedido", clear_on_submit=True):
-        col_id, col_cant, col_set = st.columns([2, 1, 1])
-        codigo_input = col_id.text_input("Código de Producto")
-        cantidad_input = col_cant.number_input("Cantidad (kg)", min_value=0.0, step=100.0)
-        setup_input = col_set.number_input("Setup (horas)", min_value=0.0, step=0.5)
-        btn_agregar = st.form_submit_button("Añadir al Plan")
-        
-        if btn_agregar:
-            if codigo_input in catalogo:
-                prox_orden = len(st.session_state.lista_pedidos) + 1
-                nuevo_item = pd.DataFrame([{
-                    "Orden": prox_orden,
-                    "Código": codigo_input,
-                    "Producto": catalogo[codigo_input]['Producto'],
-                    "Cantidad": cantidad_input,
-                    "Setup": setup_input
-                }])
-                st.session_state.lista_pedidos = pd.concat([st.session_state.lista_pedidos, nuevo_item], ignore_index=True)
-            else:
-                st.error("Código no encontrado.")
+    # 2. Entrada de Datos Masiva
+    st.subheader("📝 Entrada de Pedidos (Copiar y Pegar)")
+    
+    if "data_editor_input" not in st.session_state:
+        st.session_state.data_editor_input = pd.DataFrame(columns=["Código", "Cantidad", "Setup"])
 
-    # 3. Editor de Datos con Reordenamiento Numérico
-    if not st.session_state.lista_pedidos.empty:
+    # El editor permite pegar desde Excel
+    edited_df = st.data_editor(
+        st.session_state.data_editor_input,
+        num_rows="dynamic",
+        use_container_width=True,
+        column_config={
+            "Código": st.column_config.TextColumn("Código", help="Pega aquí los códigos"),
+            "Cantidad": st.column_config.NumberColumn("Cantidad (kg)", min_value=0),
+            "Setup": st.column_config.NumberColumn("Setup (horas)", min_value=0)
+        },
+        key="editor_masivo"
+    )
+    st.session_state.data_editor_input = edited_df
+
+    # 3. Procesamiento y Cálculo
+    if not edited_df.dropna(subset=['Código']).empty:
         st.divider()
-        st.subheader("📝 Editar y Reordenar Pedidos")
-        st.info("💡 **Para mover un producto:** Cambia el número en la columna 'Orden' y el plan se ajustará solo.")
+        st.subheader("📅 Cronograma Calculado")
         
-        # Editamos los datos y forzamos el reordenamiento por la columna 'Orden'
-        edited_df = st.data_editor(
-            st.session_state.lista_pedidos,
-            num_rows="dynamic",
-            use_container_width=True,
-            column_config={
-                "Orden": st.column_config.NumberColumn("Orden", help="Prioridad de producción", min_value=1, step=1),
-                "Producto": st.column_config.Column(disabled=True) # El nombre no se edita
-            },
-            key="editor_pedidos"
-        )
-        
-        # Si el usuario cambió un número de orden, sorteamos el DataFrame
-        st.session_state.lista_pedidos = edited_df.sort_values(by="Orden")
-
-        # 4. Cálculo del Cronograma
-        st.subheader("📅 Cronograma Resultante")
         tiempo_actual = datetime.combine(fecha_inicio_plan, datetime.min.time()).replace(hour=h_inicio)
         plan_calculado = []
 
-        for _, pedido in st.session_state.lista_pedidos.iterrows():
-            cod_str = str(pedido['Código'])
-            if cod_str not in catalogo: continue
+        for _, fila in edited_df.iterrows():
+            cod_str = str(fila['Código']).strip()
             
-            info = catalogo[cod_str]
-            tasa_kgh = float(info['Tasa']) * 1000
-            peso_u = float(info.get('Peso unitario', 0))
-            
-            # Setup
-            rem_s = float(pedido['Setup'])
-            while rem_s > 0:
-                tiempo_actual = saltar_no_laborales(tiempo_actual, lista_feriados, h_inicio, h_lun_jue, h_vie)
-                espacio = (obtener_fin_turno(tiempo_actual, h_lun_jue, h_vie) - tiempo_actual).total_seconds()/3600
-                cons = min(rem_s, espacio)
-                tiempo_actual += timedelta(hours=cons); rem_s -= cons
-            
-            inicio_prod = saltar_no_laborales(tiempo_actual, lista_feriados, h_inicio, h_lun_jue, h_vie)
-            
-            # Producción
-            rem_c = float(pedido['Cantidad'])
-            while rem_c > 0.001:
-                tiempo_actual = saltar_no_laborales(tiempo_actual, lista_feriados, h_inicio, h_lun_jue, h_vie)
-                cap_kg = ((obtener_fin_turno(tiempo_actual, h_lun_jue, h_vie) - tiempo_actual).total_seconds()/3600) * tasa_kgh
-                prod_kg = min(rem_c, cap_kg)
-                tiempo_actual += timedelta(hours=prod_kg / tasa_kgh); rem_c -= prod_kg
-            
-            plan_calculado.append({
-                "ORDEN": pedido['Orden'],
-                "CÓDIGO": pedido['Código'],
-                "PRODUCTO": pedido['Producto'],
-                "KG": pedido['Cantidad'],
-                "UNIDADES": round(pedido['Cantidad'] / peso_u, 0) if peso_u > 0 else 0,
-                "INICIO": inicio_prod.strftime('%d/%m/%y %I:%M %p'),
-                "FIN": tiempo_actual.strftime('%d/%m/%y %I:%M %p')
-            })
+            # Solo procesar si el código existe en el catálogo
+            if cod_str in catalogo:
+                info = catalogo[cod_str]
+                tasa_kgh = float(info['Tasa']) * 1000
+                peso_u = float(info.get('Peso unitario', 0))
+                
+                # Setup
+                rem_s = float(fila['Setup']) if pd.notna(fila['Setup']) else 0
+                while rem_s > 0:
+                    tiempo_actual = saltar_no_laborales(tiempo_actual, lista_feriados, h_inicio, h_lun_jue, h_vie)
+                    espacio = (obtener_fin_turno(tiempo_actual, h_lun_jue, h_vie) - tiempo_actual).total_seconds()/3600
+                    cons = min(rem_s, espacio)
+                    tiempo_actual += timedelta(hours=cons); rem_s -= cons
+                
+                inicio_prod = saltar_no_laborales(tiempo_actual, lista_feriados, h_inicio, h_lun_jue, h_vie)
+                
+                # Producción
+                rem_c = float(fila['Cantidad']) if pd.notna(fila['Cantidad']) else 0
+                while rem_c > 0.001:
+                    tiempo_actual = saltar_no_laborales(tiempo_actual, lista_feriados, h_inicio, h_lun_jue, h_vie)
+                    cap_kg = ((obtener_fin_turno(tiempo_actual, h_lun_jue, h_vie) - tiempo_actual).total_seconds()/3600) * tasa_kgh
+                    prod_kg = min(rem_c, cap_kg)
+                    tiempo_actual += timedelta(hours=prod_kg / tasa_kgh); rem_c -= prod_kg
+                
+                plan_calculado.append({
+                    "CÓDIGO": cod_str,
+                    "PRODUCTO": info['Producto'],
+                    "KG": fila['Cantidad'],
+                    "UNIDADES": round(fila['Cantidad'] / peso_u, 0) if peso_u > 0 else 0,
+                    "INICIO": inicio_prod.strftime('%d/%m/%y %I:%M %p'),
+                    "FIN": tiempo_actual.strftime('%d/%m/%y %I:%M %p')
+                })
 
-        df_final = pd.DataFrame(plan_calculado)
-        st.dataframe(df_final, use_container_width=True)
+        if plan_calculado:
+            df_final = pd.DataFrame(plan_calculado)
+            st.dataframe(df_final, use_container_width=True)
 
-        # Acciones
-        col1, col2 = st.columns([1, 4])
-        with col1:
-            if st.button("🗑️ Borrar Todo", type="primary"):
-                confirmar_borrar_todo()
-        with col2:
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                df_final.to_excel(writer, sheet_name='Plan', index=False)
-            st.download_button("📥 Descargar Excel", data=output.getvalue(), file_name="Plan_Produccion.xlsx")
+            col1, col2 = st.columns([1, 4])
+            with col1:
+                if st.button("🗑️ Limpiar Tabla", type="primary"):
+                    confirmar_borrar_todo()
+            with col2:
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                    df_final.to_excel(writer, sheet_name='Plan', index=False)
+                st.download_button("📥 Descargar Excel", data=output.getvalue(), file_name="Plan_Produccion.xlsx")
+        else:
+            st.warning("Introduce códigos válidos del catálogo para ver el cronograma.")
 
 else:
-    st.info("👋 Sube el Catálogo para comenzar.")
+    st.info("👋 Sube el Catálogo para habilitar la tabla de ingreso.")

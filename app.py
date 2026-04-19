@@ -50,20 +50,22 @@ if file_cat:
     st.divider()
     st.subheader("📋 Tabla de Pedidos")
     
+    # Editor de datos con hide_index=True para ocultar la columna sin nombre
     df_editado = st.data_editor(
         st.session_state.df_pedidos,
         num_rows="dynamic",
         use_container_width=True,
+        hide_index=True,  # Oculta la columna de índice/selección
         column_config={
             "Orden": st.column_config.NumberColumn("Orden", min_value=1, format="%d"),
             "Código": st.column_config.TextColumn("Código Material"),
             "Cantidad": st.column_config.NumberColumn("Kg", min_value=0),
             "Setup": st.column_config.NumberColumn("Setup (h)", min_value=0, step=0.5)
         },
-        key="editor_fijo"
+        key="editor_limpio"
     )
 
-    # Lógica de autollenado de 'Orden' (Consecutivo automático)
+    # Lógica de autollenado de 'Orden'
     if not df_editado.equals(st.session_state.df_pedidos):
         if len(df_editado) > 0:
             df_editado['Orden'] = pd.to_numeric(df_editado['Orden'], errors='coerce')
@@ -101,9 +103,7 @@ if file_cat:
             if cod_str in catalogo:
                 info = catalogo[cod_str]
                 tasa_kgh = float(info['Tasa']) * 1000
-                peso_u = float(info.get('Peso unitario', 1))
                 
-                # Manejo seguro de Setup (Evita el TypeError de celdas vacías)
                 try:
                     rem_s = float(fila['Setup']) if pd.notna(fila['Setup']) else 0.0
                 except:
@@ -117,7 +117,6 @@ if file_cat:
                 
                 inicio_prod = saltar_no_laborales(tiempo_actual, feriados, h_ini, h_lj, h_v)
                 
-                # Manejo seguro de Cantidad
                 try:
                     rem_c = float(fila['Cantidad']) if pd.notna(fila['Cantidad']) else 0.0
                 except:
@@ -129,10 +128,8 @@ if file_cat:
                     prod_kg = min(rem_c, cap_kg)
                     tiempo_actual += timedelta(hours=prod_kg / tasa_kgh if tasa_kgh > 0 else 0); rem_c -= prod_kg
                 
-                # Función para formatear fecha con día de la semana
                 def f_fecha(dt):
-                    dia_en = dt.strftime('%a')
-                    dia = dias_es.get(dia_en, dia_en)
+                    dia = dias_es.get(dt.strftime('%a'), dt.strftime('%a'))
                     return dt.strftime(f'{dia} %d/%m/%y %I:%M %p')
 
                 plan_calculado.append({
@@ -145,7 +142,7 @@ if file_cat:
 
         if plan_calculado:
             df_final = pd.DataFrame(plan_calculado)
-            st.dataframe(df_final, use_container_width=True)
+            st.dataframe(df_final, use_container_width=True, hide_index=True)
             
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:

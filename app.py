@@ -25,14 +25,12 @@ def saltar_no_laborales(dt, feriados, h_ini, h_lj, h_v):
         return dt
 
 # --- INICIALIZACIÓN DE DATOS ---
-# Usamos un DataFrame inicial pero dejamos que el editor maneje su estado
 if 'df_pedidos' not in st.session_state:
     st.session_state.df_pedidos = pd.DataFrame(
-        [{"Orden": 1, "Código": "", "Cantidad": 0.0, "Setup": 0.0}],
         columns=["Orden", "Código", "Cantidad", "Setup"]
     )
 
-# --- SIDEBAR ---
+# --- SIDEBAR: CONFIGURACIÓN ---
 st.sidebar.header("⚙️ Configuración de Planta")
 h_ini = st.sidebar.number_input("Hora Inicio Turno", 0, 23, 7)
 h_lj = st.sidebar.number_input("Salida Lun-Jue", 0, 23, 17)
@@ -52,36 +50,44 @@ if file_cat:
     catalogo = df_cat.drop_duplicates(subset=['Código']).set_index('Código').to_dict('index')
 
     st.divider()
-    
     st.subheader("📋 Tabla de Pedidos")
     
-    # LA SOLUCIÓN: Usamos el editor directamente sobre el estado inicial
-    # y capturamos el resultado en una nueva variable 'df_editado'
+    # Capturamos cambios en la tabla
     df_editado = st.data_editor(
         st.session_state.df_pedidos,
         num_rows="dynamic",
         use_container_width=True,
         column_config={
-            "Orden": st.column_config.NumberColumn("Orden", min_value=1, step=1),
+            "Orden": st.column_config.NumberColumn("Orden", min_value=1, help="Consecutivo automático (puedes modificarlo)"),
             "Código": st.column_config.TextColumn("Código Material"),
             "Cantidad": st.column_config.NumberColumn("Kg", min_value=0),
             "Setup": st.column_config.NumberColumn("Setup (h)", min_value=0, step=0.5)
         },
-        key="editor_fijo" # Llave estática para evitar reinicios
+        key="editor_fijo"
     )
 
-    if st.button("🗑️ Borrar toda la tabla"):
-        st.session_state.df_pedidos = pd.DataFrame(
-            [{"Orden": 1, "Código": "", "Cantidad": 0.0, "Setup": 0.0}],
-            columns=["Orden", "Código", "Cantidad", "Setup"]
-        )
+    # Lógica de autollenado de 'Orden'
+    if len(df_editado) > 0:
+        # Detectar filas donde el orden sea nulo o cero
+        mask = df_editado['Orden'].isna() | (df_editado['Orden'] == 0)
+        if mask.any():
+            for idx in df_editado[mask].index:
+                max_actual = df_editado['Orden'].max()
+                nuevo_valor = 1 if pd.isna(max_actual) or max_actual == 0 else int(max_actual) + 1
+                df_editado.at[idx, 'Orden'] = nuevo_valor
+            st.session_state.df_pedidos = df_editado
+            st.rerun()
+        else:
+            st.session_state.df_pedidos = df_editado
+
+    if st.button("🗑️ Borrar toda la tabla", type="primary"):
+        st.session_state.df_pedidos = pd.DataFrame(columns=["Orden", "Código", "Cantidad", "Setup"])
         st.rerun()
 
     # 3. Cálculo del Cronograma
     st.divider()
     fecha_inicio_plan = st.date_input("📅 Fecha de inicio de producción", datetime.now())
 
-    # Validamos datos sobre el DF que sale del editor
     df_para_calc = df_editado[df_editado['Código'].astype(str).str.strip() != ""]
     
     if not df_para_calc.empty:
@@ -89,7 +95,9 @@ if file_cat:
         
         tiempo_actual = datetime.combine(fecha_inicio_plan, datetime.min.time()).replace(hour=h_ini)
         plan_calculado = []
+        dias_es = {"Mon": "Lun", "Tue": "Mar", "Wed": "Mie", "Thu": "Jue", "Fri": "Vie", "Sat": "Sab", "Sun": "Dom"}
 
+        # Ordenar por el número de 'Orden' antes de procesar
         for _, fila in df_para_calc.sort_values("Orden").iterrows():
             cod_str = str(fila['Código']).strip()
             
@@ -116,12 +124,16 @@ if file_cat:
                     prod_kg = min(rem_c, cap_kg)
                     tiempo_actual += timedelta(hours=prod_kg / tasa_kgh); rem_c -= prod_kg
                 
+                def f_fecha(dt):
+                    dia = dias_es.get(dt.strftime('%a'), dt.strftime('%a'))
+                    return dt.strftime(f'{dia} %d/%m/%y %I:%M %p')
+
                 plan_calculado.append({
-                    "PRIORIDAD": fila['Orden'],
+                    "ORDEN": fila['Orden'],
                     "CÓDIGO": cod_str,
                     "PRODUCTO": info['Producto'],
-                    "INICIO": inicio_prod.strftime('%d/%m/%y %I:%M %p'),
-                    "FIN": tiempo_actual.strftime('%d/%m/%y %I:%M %p')
+                    "INICIO": f_fecha(inicio_prod),
+                    "FIN": f_fecha(tiempo_actual)
                 })
 
         if plan_calculado:
@@ -131,7 +143,6 @@ if file_cat:
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df_final.to_excel(writer, sheet_name='Plan', index=False)
-            st.download_button("📥 Descargar Plan en Excel", data=output.getvalue(), file_name="Plan_Heredia.xlsx")
-
+            st.download_button("📥 Descargar Excel", data=output.getvalue(), file_name="Plan_Produccion_Heredia.xlsx")
 else:
-    st.info("👋 Sube el catálogo para habilitar la tabla.")
+    st.info("👋 Por favor, sube el catálogo para comenzar.")

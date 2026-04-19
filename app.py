@@ -42,7 +42,6 @@ st.title("🏭 Planificador de Producción Estable")
 file_cat = st.file_uploader("1. Sube el Catálogo de Productos", type=["xlsx"])
 
 if file_cat:
-    # Selector de fecha después de subir el catálogo
     st.divider()
     fecha_inicio_plan = st.date_input("📅 Fecha de inicio de producción", datetime.now())
     
@@ -53,38 +52,26 @@ if file_cat:
 
     st.divider()
     
-    # --- FORMULARIO DE INGRESO ---
     st.subheader("➕ Agregar Nuevo Pedido")
     with st.form("nuevo_pedido", clear_on_submit=True):
         col1, col2, col3 = st.columns(3)
         cod_input = col1.text_input("Código de Material")
-        # Botones de cantidad aumentan/disminuyen 500 kg
         cant_input = col2.number_input("Cantidad (Kg)", min_value=0.0, step=500.0)
         set_input = col3.number_input("Setup (Horas)", min_value=0.0, step=0.5)
-        
         submit = st.form_submit_button("Agregar a la lista")
         
         if submit:
             cod_limpio = cod_input.strip()
             if cod_limpio in catalogo:
-                nueva_fila = pd.DataFrame([{
-                    "Orden": len(st.session_state.lista_pedidos) + 1,
-                    "Código": cod_limpio,
-                    "Cantidad": cant_input,
-                    "Setup": set_input
-                }])
+                nueva_fila = pd.DataFrame([{"Orden": len(st.session_state.lista_pedidos) + 1, "Código": cod_limpio, "Cantidad": cant_input, "Setup": set_input}])
                 st.session_state.lista_pedidos = pd.concat([st.session_state.lista_pedidos, nueva_fila], ignore_index=True)
                 st.success(f"Producto {cod_limpio} agregado.")
             else:
                 st.error("❌ El código no existe en el catálogo.")
 
-    # --- TABLA DE PEDIDOS EDITABLE EN COLA ---
     if not st.session_state.lista_pedidos.empty:
         st.divider()
         st.subheader("📋 Pedidos en Cola (Editables)")
-        st.info("💡 Haz clic en cualquier celda para corregir datos. El cronograma se actualizará solo.")
-        
-        # Editor para modificar lo que ya está en cola
         df_editado = st.data_editor(
             st.session_state.lista_pedidos,
             num_rows="dynamic",
@@ -104,7 +91,6 @@ if file_cat:
             st.session_state.lista_pedidos = pd.DataFrame(columns=["Orden", "Código", "Cantidad", "Setup"])
             st.rerun()
 
-        # --- CÁLCULO DEL CRONOGRAMA ---
         st.divider()
         st.subheader("📅 Cronograma Resultante")
         
@@ -112,7 +98,6 @@ if file_cat:
         plan_final = []
         dias_es = {"Mon": "Lun", "Tue": "Mar", "Wed": "Mie", "Thu": "Jue", "Fri": "Vie", "Sat": "Sab", "Sun": "Dom"}
 
-        # Respetar el orden definido por el usuario
         df_para_calc = st.session_state.lista_pedidos.sort_values("Orden")
 
         for _, p in df_para_calc.iterrows():
@@ -121,14 +106,13 @@ if file_cat:
                 info = catalogo[cod_str]
                 tasa_kgh = float(info['Tasa']) * 1000
                 
-                # Manejo de valores vacíos tras edición
                 try:
                     rem_s = float(p['Setup']) if pd.notna(p['Setup']) else 0.0
                     rem_c = float(p['Cantidad']) if pd.notna(p['Cantidad']) else 0.0
                 except:
                     rem_s, rem_c = 0.0, 0.0
 
-                # Cálculo de tiempos de Setup
+                # Lógica de Setup
                 while rem_s > 0:
                     tiempo_actual = saltar_no_laborales(tiempo_actual, feriados, h_ini, h_lj, h_v)
                     espacio = (obtener_fin_turno(tiempo_actual, h_lj, h_v) - tiempo_actual).total_seconds()/3600
@@ -137,33 +121,70 @@ if file_cat:
                 
                 inicio_prod = saltar_no_laborales(tiempo_actual, feriados, h_ini, h_lj, h_v)
                 
-                # Cálculo de tiempos de Producción
-                while rem_c > 0.001:
+                # Lógica de Producción
+                kg_por_dia = []
+                temp_c = rem_c
+                while temp_c > 0.001:
                     tiempo_actual = saltar_no_laborales(tiempo_actual, feriados, h_ini, h_lj, h_v)
                     cap_kg = ((obtener_fin_turno(tiempo_actual, h_lj, h_v) - tiempo_actual).total_seconds()/3600) * tasa_kgh
-                    prod_kg = min(rem_c, cap_kg)
-                    tiempo_actual += timedelta(hours=prod_kg / tasa_kgh if tasa_kgh > 0 else 0); rem_c -= prod_kg
+                    prod_kg = min(temp_c, cap_kg)
+                    
+                    # Guardamos cuánto se hizo en esta fecha específica
+                    kg_por_dia.append({"fecha": tiempo_actual.strftime("%Y-%m-%d"), "kg": prod_kg})
+                    
+                    tiempo_actual += timedelta(hours=prod_kg / tasa_kgh if tasa_kgh > 0 else 0); temp_c -= prod_kg
                 
                 def f_fecha(dt):
                     dia = dias_es.get(dt.strftime('%a'), dt.strftime('%a'))
                     return dt.strftime(f'{dia} %d/%m/%y %I:%M %p')
 
                 plan_final.append({
-                    "ORDEN": int(p['Orden']) if pd.notna(p['Orden']) else 0,
+                    "ORDEN": int(p['Orden']),
                     "CÓDIGO": cod_str,
                     "PRODUCTO": info['Producto'],
+                    "CANTIDAD": p['Cantidad'],
                     "INICIO": f_fecha(inicio_prod),
-                    "FIN": f_fecha(tiempo_actual)
+                    "FIN": f_fecha(tiempo_actual),
+                    "DETALLE_DIARIO": kg_por_dia
                 })
 
         if plan_final:
-            df_cronograma = pd.DataFrame(plan_final)
+            df_cronograma = pd.DataFrame(plan_final).drop(columns=["DETALLE_DIARIO"])
             st.dataframe(df_cronograma, use_container_width=True, hide_index=True)
             
+            # --- GENERACIÓN DE EXCEL PROFESIONAL ---
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                df_cronograma.to_excel(writer, sheet_name='Plan', index=False)
-            st.download_button("📥 Descargar Plan Excel", data=output.getvalue(), file_name="Plan_Produccion.xlsx")
+                workbook = writer.book
+                
+                # Formatos profesionales
+                fmt_header = workbook.add_format({'bold': True, 'bg_color': '#1F4E78', 'font_color': 'white', 'border': 1, 'align': 'center'})
+                fmt_cell = workbook.add_format({'border': 1, 'align': 'left'})
+                fmt_num = workbook.add_format({'border': 1, 'num_format': '#,##0', 'align': 'right'})
 
+                # HOJA 1: Plan de Producción
+                df_cronograma.to_excel(writer, sheet_name='Plan de Producción', index=False)
+                ws1 = writer.sheets['Plan de Producción']
+                for col_num, value in enumerate(df_cronograma.columns.values):
+                    ws1.write(0, col_num, value, fmt_header)
+                    ws1.set_column(col_num, col_num, 22, fmt_cell)
+
+                # HOJA 2: Resumen Diario
+                resumen_data = []
+                for p in plan_final:
+                    for d in p['DETALLE_DIARIO']:
+                        resumen_data.append({"Fecha": d['fecha'], "Código": p['CÓDIGO'], "Producto": p['PRODUCTO'], "Kg": d['kg']})
+                
+                if resumen_data:
+                    df_res = pd.DataFrame(resumen_data)
+                    df_res_agg = df_res.groupby(["Fecha", "Código", "Producto"])["Kg"].sum().reset_index()
+                    df_res_agg.to_excel(writer, sheet_name='Producción Diaria', index=False)
+                    ws2 = writer.sheets['Producción Diaria']
+                    for col_num, value in enumerate(df_res_agg.columns.values):
+                        ws2.write(0, col_num, value, fmt_header)
+                        ws2.set_column(col_num, col_num, 20, fmt_cell)
+                    ws2.set_column(3, 3, 15, fmt_num) # Columna Kg
+
+            st.download_button("📥 Descargar Plan Profesional", data=output.getvalue(), file_name="Plan_Produccion_Heredia.xlsx")
 else:
-    st.info("👋 Por favor, sube el catálogo para comenzar a planificar.")
+    st.info("👋 Sube el catálogo para comenzar.")
